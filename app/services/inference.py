@@ -9,6 +9,11 @@ import logging
 import json
 from typing import Optional
 from openai import OpenAI
+import torch
+import torch.nn as nn
+import torchvision.models as models
+import torchvision.transforms as transforms
+from pathlib import Path
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -174,59 +179,85 @@ ICD_MAP = {
     "Contact dermatitis": "L25",
 }
 
+# Skin Disease Classifier Model
 model = None
-YOLO = None
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def load_yolo():
-    """Lazy import YOLO to reduce initial memory usage"""
-    global YOLO
-    if YOLO is None:
-        try:
-            # Try to import ultralytics
-            from ultralytics import YOLO as _YOLO
-            YOLO = _YOLO
-            logger.info("Successfully loaded YOLO")
-        except ImportError as e:
-            logger.error(f"Failed to import YOLO: {e}")
-            logger.warning("YOLO model unavailable, will use fallback methods")
-            YOLO = None
-            return None
-        except Exception as e:
-            logger.error(f"Error loading YOLO dependencies: {e}")
-            logger.warning("YOLO model unavailable due to system dependencies")
-            YOLO = None
-            return None
-    return YOLO
+# Skin disease classification labels (matching existing skin disease categories)
+SKIN_DISEASE_LABELS = [
+    "Acne",
+    "Actinic Keratosis", 
+    "Atopic dermatitis",
+    "Benign Tumors",
+    "Bullous",
+    "Candidiasis",
+    "Contact dermatitis",
+    "Drug Eruption",
+    "Eczema",
+    "Infestations/Bites",
+    "Lichen",
+    "Lupus",
+    "Moles",
+    "Psoriasis",
+    "Rosacea",
+    "Seborrheic dermatitis",
+    "Seborrheic Keratoses",
+    "Skin Cancer",
+    "Sun/Sunlight Damage",
+    "Tinea",
+    "Unknown/Normal",
+    "Vascular Tumors",
+    "Vasculitis",
+    "Vitiligo",
+    "Warts"
+]
+
+# Map index to skin disease label
+LABEL_MAP = {i: label for i, label in enumerate(SKIN_DISEASE_LABELS)}
+
+# Image preprocessing transforms
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225]
+    ),
+])
+
+class SkinDiseaseClassifier(nn.Module):
+    def __init__(self, num_classes, pretrained=True):
+        super().__init__()
+        # Use EfficientNet-B0 architecture
+        self.model = models.efficientnet_b0(
+            weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1 if pretrained else None
+        )
+        in_features = self.model.classifier[1].in_features
+        self.model.classifier = nn.Sequential(
+            nn.Linear(in_features, num_classes)
+        )
+
+    def forward(self, x):
+        return self.model(x)
 
 def download_model():
-    """Download and load the YOLO model"""
     global model
     if model is None:
-        YOLO = load_yolo()
-        
-        # If YOLO is unavailable, return None to trigger fallback
-        if YOLO is None:
-            logger.warning("YOLO unavailable, using fallback inference methods")
-            return None
-        
         try:
-            # Priority 1: Try local model path (models/best_efficientnet.pth)
-            local_model_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models", "best_efficientnet.pth")
-            if os.path.exists(local_model_path):
+            NUM_CLASSES = len(SKIN_DISEASE_LABELS)
+            
+            # Priority 1: Try local model path
+            script_dir = Path(__file__).resolve().parent.parent.parent
+            local_model_path = script_dir / "models" / "best_efficientnet.pth"
+            
+            if local_model_path.exists():
                 logger.info(f"Loading local model from: {local_model_path}")
-                try:
-                    # Try as classification model first
-                    model = YOLO(local_model_path, task='classify')
-                    logger.info("Successfully loaded local custom model as classification")
-                    return model
-                except Exception as e:
-                    try:
-                        # Fallback to detection model
-                        model = YOLO(local_model_path, task='detect')
-                        logger.info("Successfully loaded local custom model as detection")
-                        return model
-                    except Exception as e2:
-                        logger.error(f"Failed to load local model: {e}, {e2}")
+                model = SkinDiseaseClassifier(num_classes=NUM_CLASSES, pretrained=False)
+                model.load_state_dict(torch.load(local_model_path, map_location=device))
+                model.eval()
+                model.to(device)
+                logger.info("Successfully loaded local EfficientNet model")
+                return model
             else:
                 logger.info(f"Local model not found at: {local_model_path}")
             
@@ -234,26 +265,18 @@ def download_model():
             env_model_path = settings.model_path
             if env_model_path and os.path.exists(env_model_path):
                 logger.info(f"Loading model from environment path: {env_model_path}")
-                try:
-                    # Try as classification model first
-                    model = YOLO(env_model_path, task='classify')
-                    logger.info("Successfully loaded environment model as classification")
-                    return model
-                except Exception as e:
-                    try:
-                        # Fallback to detection model
-                        model = YOLO(env_model_path, task='detect')
-                        logger.info("Successfully loaded environment model as detection")
-                        return model
-                    except Exception as e2:
-                        logger.error(f"Failed to load environment model: {e}, {e2}")
+                model = SkinDiseaseClassifier(num_classes=NUM_CLASSES, pretrained=False)
+                model.load_state_dict(torch.load(env_model_path, map_location=device))
+                model.eval()
+                model.to(device)
+                logger.info("Successfully loaded environment EfficientNet model")
+                return model
 
-            # Priority 3: Download from Hugging Face
+            # Priority 3: Download from URL
             model_url = settings.model_url
             if model_url:
-                logger.info(f"Downloading custom model from HuggingFace: {model_url}")
-                # Use .pt extension for YOLO compatibility
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.pt') as tmp_file:
+                logger.info(f"Downloading EfficientNet model from: {model_url}")
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.pth') as tmp_file:
                     try:
                         response = requests.get(model_url, stream=True, timeout=300)
                         response.raise_for_status()
@@ -273,17 +296,12 @@ def download_model():
                         tmp_file.flush()
                         logger.info("Model download completed, loading...")
                         
-                        # Try to load the downloaded model with explicit task type
-                        try:
-                            # First try as classification model
-                            model = YOLO(tmp_file.name, task='classify')
-                            logger.info("Successfully loaded HuggingFace model as classification")
-                            return model
-                        except:
-                            # Fallback to detection model
-                            model = YOLO(tmp_file.name, task='detect')
-                            logger.info("Successfully loaded HuggingFace model as detection")
-                            return model
+                        model = SkinDiseaseClassifier(num_classes=NUM_CLASSES, pretrained=False)
+                        model.load_state_dict(torch.load(tmp_file.name, map_location=device))
+                        model.eval()
+                        model.to(device)
+                        logger.info("Successfully loaded downloaded EfficientNet model")
+                        return model
                         
                     except requests.RequestException as e:
                         logger.error(f"Network error downloading model: {e}")
@@ -295,19 +313,18 @@ def download_model():
                         except:
                             pass
             else:
-                logger.warning("No HuggingFace model URL provided")
+                logger.warning("No model URL provided")
 
-            # Priority 4: Fallback to built-in YOLO classification model
-            logger.info("Falling back to built-in YOLO classification model")
-            try:
-                model = YOLO('yolov8n-cls.pt')  # Built-in classification model
-                logger.info("Successfully loaded built-in YOLO model as fallback")
-                return model
-            except Exception as e:
-                logger.error(f"Built-in YOLO model also failed: {e}")
-                return None
+            # Fallback: Use pretrained model without custom weights
+            logger.info("Falling back to pretrained EfficientNet model")
+            model = SkinDiseaseClassifier(num_classes=NUM_CLASSES, pretrained=True)
+            model.eval()
+            model.to(device)
+            logger.warning("Using pretrained EfficientNet model - predictions may not be accurate for skin diseases")
+            return model
+            
         except Exception as e:
-            logger.error(f"Error loading YOLO model: {e}")
+            logger.error(f"Error loading EfficientNet model: {e}")
             return None
     
     return model
@@ -373,9 +390,9 @@ async def run_inference(img_bytes: bytes) -> DiagnosisResponse:
             logger.error(f"Invalid image file: {e}")
             return _mock_response()
         
-        # If YOLO model is unavailable, use Vision API directly
+        # If EfficientNet model is unavailable, use Vision API directly
         if model is None:
-            logger.info("YOLO model unavailable, using Vision API for analysis")
+            logger.info("EfficientNet model unavailable, using Vision API for analysis")
             vision_analysis = await analyze_image_with_vision(img_bytes)
             
             if vision_analysis:
@@ -399,7 +416,7 @@ async def run_inference(img_bytes: bytes) -> DiagnosisResponse:
                 meta = {
                     "modelVersion": f"{settings.model_version}-vision-only",
                     "analysis_method": "vision_only",
-                    "reason": "YOLO model unavailable",
+                    "reason": "EfficientNet model unavailable",
                     "vision_features": vision_analysis.get("features", "")
                 }
                 
@@ -413,19 +430,27 @@ async def run_inference(img_bytes: bytes) -> DiagnosisResponse:
                 )
             else:
                 # Vision API also failed, return enhanced mock response
-                logger.warning("Both YOLO and Vision API unavailable, using mock response")
+                logger.warning("Both EfficientNet and Vision API unavailable, using mock response")
                 return _enhanced_mock_response()
         
-        # Standard YOLO inference flow
-        results = model(image, verbose=False)
+        # Standard EfficientNet inference flow
+        img_tensor = transform(image).unsqueeze(0).to(device)
         
-        pred_idx = int(results[0].probs.top1)
-        pred_conf = float(results[0].probs.top1conf)
-        pred_label = results[0].names[pred_idx]
-        
-        top5_idx = results[0].probs.top5
-        top5_labels = [results[0].names[i] for i in top5_idx]
-        top5_confs = [float(results[0].probs.data[i]) for i in top5_idx]
+        with torch.no_grad():
+            outputs = model(img_tensor)
+            probabilities = torch.softmax(outputs, 1)
+            
+            # Get top prediction
+            _, predicted = torch.max(outputs, 1)
+            pred_idx = predicted.item()
+            pred_conf = probabilities[0, pred_idx].item()
+            pred_label = LABEL_MAP[pred_idx]
+            
+            # Get top 5 predictions
+            top5_probs, top5_indices = torch.topk(probabilities, 5, dim=1)
+            top5_idx = top5_indices[0].tolist()
+            top5_labels = [LABEL_MAP[i] for i in top5_idx]
+            top5_confs = top5_probs[0].tolist()
         
         if pred_conf < settings.confidence_threshold:
             logger.info(f"Low confidence ({pred_conf:.2%}), using Vision API fallback")
@@ -457,7 +482,7 @@ async def run_inference(img_bytes: bytes) -> DiagnosisResponse:
                 meta = {
                     "modelVersion": settings.model_version,
                     "analysis_method": "vision_fallback",
-                    "yolo_confidence": pred_conf,
+                    "efficientnet_confidence": pred_conf,
                     "vision_features": vision_analysis.get("features", "")
                 }
                 
@@ -470,7 +495,8 @@ async def run_inference(img_bytes: bytes) -> DiagnosisResponse:
                     _meta=meta
                 )
         
-        mapped_label = _map_prediction_to_condition(pred_label)
+        # Use the predicted skin disease label directly
+        mapped_label = pred_label
         
         severity = await determine_severity_with_llm(mapped_label, pred_conf)
         
@@ -481,11 +507,10 @@ async def run_inference(img_bytes: bytes) -> DiagnosisResponse:
         )
         
         other_conditions = []
-        for i, (label, conf) in enumerate(zip(top5_labels, top5_confs)):
-            mapped = _map_prediction_to_condition(label)
+        for label, conf in zip(top5_labels, top5_confs):
             other_conditions.append(ConditionProb(
-                label=mapped,
-                icd10=ICD_MAP.get(mapped, "L30.9"),
+                label=label,
+                icd10=ICD_MAP.get(label, "L99"),  # Use appropriate ICD-10 code for skin diseases
                 confidence=conf
             ))
         
@@ -499,7 +524,7 @@ async def run_inference(img_bytes: bytes) -> DiagnosisResponse:
         
         meta = {
             "modelVersion": settings.model_version,
-            "analysis_method": "yolo_plus_llm",
+            "analysis_method": "efficientnet_plus_llm",
             "llm_severity": True
         }
         if ai_insights:

@@ -7,8 +7,8 @@ class Settings(BaseModel):
     database_url: str = os.getenv("DATABASE_URL", "postgresql+asyncpg://skinscan:skinscan@localhost:5432/skinscan")
     cors_origins: str = os.getenv("CORS_ORIGINS", "http://localhost:3000")
     store_images: bool = os.getenv("STORE_IMAGES", "false").lower() == "true"
-    model_version: str = os.getenv("MODEL_VERSION", "skinscan-derm-v1")
-    model_path: str = os.getenv("MODEL_PATH", "")
+    model_version: str = os.getenv("MODEL_VERSION", "efficientnet-skin-disease-v1")
+    model_path: str = os.getenv("MODEL_PATH", "best_efficientnet.pth")
     model_url: str = os.getenv("MODEL_URL", "https://huggingface.co/fauzanazz/EfficientNet-skin-disease/resolve/main/best_efficientnet.pth")
     
     # OpenAI/VLLM Configuration
