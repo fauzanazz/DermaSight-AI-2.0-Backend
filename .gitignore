@@ -63,9 +63,7 @@ alembic/versions/*.py
 
 # Model files (if storing ML models)
 *.pkl
-*.pth
 *.onnx
-models/
 
 # Images (if storing uploaded images)
 uploads/
