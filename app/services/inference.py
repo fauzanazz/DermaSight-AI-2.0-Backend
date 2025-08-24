@@ -228,7 +228,7 @@ transform = transforms.Compose([
 class SkinDiseaseClassifier(nn.Module):
     def __init__(self, num_classes, pretrained=True):
         super().__init__()
-        # Use EfficientNet-B0 architecture
+        # Use EfficientNet-B3 architecture
         self.model = models.efficientnet_b3(
             weights=models.EfficientNet_B3_Weights.IMAGENET1K_V1 if pretrained else None
         )
@@ -243,7 +243,7 @@ class SkinDiseaseClassifier(nn.Module):
 def _load_model_from_state_dict_file(state_path: str, num_classes: int):
     """Try loading a checkpoint into torchvision EfficientNet; on failure, try efficientnet_pytorch."""
     try:
-        # Try torchvision EfficientNet-B0 first
+        # Try torchvision EfficientNet-B3 first
         tv_model = SkinDiseaseClassifier(num_classes=num_classes, pretrained=False)
         state = torch.load(state_path, map_location=device)
         tv_model.load_state_dict(state)
@@ -251,7 +251,7 @@ def _load_model_from_state_dict_file(state_path: str, num_classes: int):
         tv_model.to(device)
         return tv_model
     except Exception as e:
-        logger.error(f"Error loading as torchvision EfficientNet-B0: {e}")
+        logger.error(f"Error loading as torchvision EfficientNet-B3: {e}")
 
     # Try efficientnet_pytorch features-only load
     try:
@@ -261,14 +261,14 @@ def _load_model_from_state_dict_file(state_path: str, num_classes: int):
         return None
     try:
         state = torch.load(state_path, map_location=device)
-        model_ep = EfficientNet.from_name('efficientnet-b0')
+        model_ep = EfficientNet.from_name('efficientnet-b3')
 
         # Remove classifier weights to avoid size mismatch; we'll re-add our head
         if isinstance(state, dict):
             state.pop('_fc.weight', None)
             state.pop('_fc.bias', None)
 
-        missing_unexpected = model_ep.load_state_dict(state, strict=False)
+        model_ep.load_state_dict(state, strict=False)
         # Replace head with our desired number of classes
         in_features = model_ep._fc.in_features
         model_ep._fc = nn.Linear(in_features, num_classes)
