@@ -1,22 +1,21 @@
 FROM python:3.11-slim
 
-# Install system dependencies required for OpenCV and YOLO
+# Install system dependencies required for OpenCV and basic functionality
+# Using minimal set to avoid package conflicts in newer Debian versions
 RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    libgomp1 \
-    libgthread-2.0-0 \
-    libgtk-3-0 \
-    libcairo-gobject2 \
-    libgdk-pixbuf2.0-0 \
-    libpango-1.0-0 \
-    libatk1.0-0 \
-    libcairo2 \
-    libffi-dev \
     curl \
+    libglib2.0-0 \
+    libgomp1 \
+    libffi-dev \
+    python3-dev \
+    && apt-get install -y --no-install-recommends \
+    libgl1-mesa-dev || true \
+    && apt-get install -y --no-install-recommends \
+    libgdk-pixbuf-2.0-0 || libgdk-pixbuf-xlib-2.0-0 \
+    && apt-get install -y --no-install-recommends \
+    libgtk-3-0 \
+    libcairo2 \
+    libpango-1.0-0 \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
