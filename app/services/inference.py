@@ -348,7 +348,7 @@ async def determine_severity_with_llm(condition: str, confidence: float) -> str:
             model=settings.openai_model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
-            max_completion_tokens=10
+            max_tokens=10
         )
         
         severity = response.choices[0].message.content.strip().lower()
@@ -640,7 +640,7 @@ async def analyze_image_with_vision(img_bytes: bytes) -> dict:
                 ]
             }],
             temperature=0.2,
-            max_completion_tokens=600
+            max_tokens=600
         )
         
         vision_content = response.choices[0].message.content
@@ -679,7 +679,7 @@ async def enhance_diagnosis_with_ai(condition: str, confidence: float, severity:
             model=settings.openai_model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
-            max_completion_tokens=500
+            max_tokens=500
         )
         
         ai_content = response.choices[0].message.content
