@@ -620,16 +620,21 @@ async def analyze_image_with_vision(img_bytes: bytes) -> dict:
         img_base64 = base64.b64encode(img_bytes).decode('utf-8')
         
         prompt = """
-        You are a dermatology specialist. Analyze this skin image and provide:
+        You are a dermatology specialist. Analyze this skin image and provide your assessment.
         
-        1. Most likely skin condition
-        2. Confidence level (as percentage)
-        3. Severity assessment (mild/moderate/severe)
-        4. Key visual features observed
-        5. Recommended care instructions
-        6. When to seek professional help
+        IMPORTANT: Your response must be ONLY valid JSON format with no additional text, explanations, or markdown formatting.
         
-        Format as JSON with keys: condition, confidence_pct, severity, features, care_instructions, seek_help
+        Required JSON structure:
+        {
+            "condition": "most likely skin condition name",
+            "confidence_pct": 75,
+            "severity": "mild|moderate|severe",
+            "features": "key visual features observed",
+            "care_instructions": ["instruction 1", "instruction 2", "instruction 3"],
+            "seek_help": "when to seek professional help"
+        }
+        
+        Respond with only the JSON object, no other text.
         """
         
         # Vision API using latest OpenAI format
@@ -652,7 +657,22 @@ async def analyze_image_with_vision(img_bytes: bytes) -> dict:
         )
         
         vision_content = response.choices[0].message.content
-        return json.loads(vision_content)
+        logger.info(f"Vision API raw response: {vision_content}")
+        
+        try:
+            return json.loads(vision_content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse vision response as JSON: {e}")
+            logger.error(f"Raw content: {vision_content}")
+            # Return a fallback structure
+            return {
+                "condition": "Unknown/Normal",
+                "confidence_pct": 50,
+                "severity": "mild",
+                "features": "Unable to analyze image",
+                "care_instructions": ["Monitor condition", "Seek professional evaluation"],
+                "seek_help": "Consider professional evaluation for accurate diagnosis."
+            }
         
     except Exception as e:
         logger.error(f"Vision analysis error: {e}")
@@ -666,21 +686,24 @@ async def enhance_diagnosis_with_ai(condition: str, confidence: float, severity:
             return {}
             
         prompt = f"""
-        You are a dermatology AI assistant. Based on the following computer vision diagnosis, provide medical insights:
+        You are a dermatology AI assistant. Based on the following computer vision diagnosis, provide medical insights.
         
         Condition: {condition}
         Confidence: {confidence:.2%}
         Severity: {severity}
         
-        Please provide:
-        1. Brief clinical description of the condition
-        2. Common symptoms to look for
-        3. Recommended care instructions (3-4 items)
-        4. When to seek professional help
-        5. Differential diagnoses to consider
+        IMPORTANT: Your response must be ONLY valid JSON format with no additional text, explanations, or markdown formatting.
         
-        Format your response as JSON with keys: description, symptoms, care_instructions, seek_help, differentials
-        Keep responses concise and medically accurate.
+        Required JSON structure:
+        {{
+            "description": "brief clinical description of the condition",
+            "symptoms": "common symptoms to look for",
+            "care_instructions": ["instruction 1", "instruction 2", "instruction 3", "instruction 4"],
+            "seek_help": "when to seek professional help",
+            "differentials": ["differential 1", "differential 2", "differential 3"]
+        }}
+        
+        Respond with only the JSON object, no other text.
         """
         
         response = create_chat_completion(
@@ -691,7 +714,15 @@ async def enhance_diagnosis_with_ai(condition: str, confidence: float, severity:
         )
         
         ai_content = response.choices[0].message.content
-        return json.loads(ai_content)
+        logger.info(f"AI enhancement raw response: {ai_content}")
+        
+        try:
+            return json.loads(ai_content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse AI enhancement response as JSON: {e}")
+            logger.error(f"Raw content: {ai_content}")
+            # Return empty dict to trigger fallback behavior
+            return {}
         
     except Exception as e:
         logger.error(f"AI enhancement error: {e}")
