@@ -33,26 +33,13 @@ def get_openai_client():
     return openai_client
 
 def create_chat_completion(client, model, messages, temperature, max_tokens_value):
-    """Create chat completion with proper token parameter handling"""
-    try:
-        # Try with max_completion_tokens first (newer models)
-        return client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_completion_tokens=max_tokens_value
-        )
-    except Exception as e:
-        if "max_completion_tokens" in str(e):
-            # Fallback to max_tokens for older models/versions
-            return client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens_value
-            )
-        else:
-            raise e
+    """Create chat completion using the latest OpenAI API"""
+    return client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=temperature,
+        max_completion_tokens=max_tokens_value
+    )
 
 PREMED = {
     # Acne
@@ -647,48 +634,25 @@ async def analyze_image_with_vision(img_bytes: bytes) -> dict:
         Format as JSON with keys: condition, confidence_pct, severity, features, care_instructions, seek_help
         """
         
-        # Vision API still uses Chat Completions format
-        try:
-            response = client.chat.completions.create(
-                model=settings.openai_vision_model,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{img_base64}",
-                                "detail": "high"
-                            }
+        # Vision API using latest OpenAI format
+        response = client.chat.completions.create(
+            model=settings.openai_vision_model,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{img_base64}",
+                            "detail": "high"
                         }
-                    ]
-                }],
-                temperature=0.2,
-                max_completion_tokens=600
-            )
-        except Exception as e:
-            if "max_completion_tokens" in str(e):
-                response = client.chat.completions.create(
-                    model=settings.openai_vision_model,
-                    messages=[{
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{img_base64}",
-                                    "detail": "high"
-                                }
-                            }
-                        ]
-                    }],
-                    temperature=0.2,
-                    max_tokens=600
-                )
-            else:
-                raise e
+                    }
+                ]
+            }],
+            temperature=0.2,
+            max_completion_tokens=600
+        )
         
         vision_content = response.choices[0].message.content
         return json.loads(vision_content)
