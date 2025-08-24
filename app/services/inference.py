@@ -32,12 +32,11 @@ def get_openai_client():
         )
     return openai_client
 
-def create_chat_completion(client, model, messages, temperature, max_tokens_value):
+def create_chat_completion(client, model, messages, max_tokens_value):
     """Create chat completion using the latest OpenAI API"""
     return client.chat.completions.create(
         model=model,
         messages=messages,
-        temperature=temperature,
         max_completion_tokens=max_tokens_value
     )
 
@@ -357,7 +356,6 @@ async def determine_severity_with_llm(condition: str, confidence: float) -> str:
             client=client,
             model=settings.openai_model,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
             max_tokens_value=10
         )
         
@@ -650,7 +648,6 @@ async def analyze_image_with_vision(img_bytes: bytes) -> dict:
                     }
                 ]
             }],
-            temperature=0.2,
             max_completion_tokens=600
         )
         
@@ -690,7 +687,6 @@ async def enhance_diagnosis_with_ai(condition: str, confidence: float, severity:
             client=client,
             model=settings.openai_model,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
             max_tokens_value=500
         )
         
