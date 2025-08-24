@@ -32,22 +32,24 @@ def get_openai_client():
         )
     return openai_client
 
-def create_chat_completion(client, model, messages, temperature, max_tokens_value):
-    """Create chat completion with proper token parameter handling"""
+def create_openai_response(client, model, input_text, temperature, max_tokens_value):
+    """Create OpenAI response using the modern Responses API"""
     try:
-        # Try with max_completion_tokens first (newer models)
-        return client.chat.completions.create(
+        # Use the modern Responses API
+        return client.responses.create(
             model=model,
-            messages=messages,
+            input=input_text,
+            instructions="You are a medical AI assistant. Provide accurate, concise medical information.",
             temperature=temperature,
             max_completion_tokens=max_tokens_value
         )
     except Exception as e:
-        if "max_completion_tokens" in str(e) and "max_tokens" in str(e):
-            # Fallback to max_tokens for older models
-            return client.chat.completions.create(
+        if "max_completion_tokens" in str(e):
+            # Fallback to traditional parameter if needed
+            return client.responses.create(
                 model=model,
-                messages=messages,
+                input=input_text,
+                instructions="You are a medical AI assistant. Provide accurate, concise medical information.",
                 temperature=temperature,
                 max_tokens=max_tokens_value
             )
@@ -366,15 +368,15 @@ async def determine_severity_with_llm(condition: str, confidence: float) -> str:
         Respond with only the severity level (mild/moderate/severe).
         """
         
-        response = create_chat_completion(
+        response = create_openai_response(
             client=client,
             model=settings.openai_model,
-            messages=[{"role": "user", "content": prompt}],
+            input_text=prompt,
             temperature=0.1,
             max_tokens_value=10
         )
         
-        severity = response.choices[0].message.content.strip().lower()
+        severity = response.output_text.strip().lower()
         if severity in ["mild", "moderate", "severe"]:
             return severity
         else:
@@ -647,25 +649,48 @@ async def analyze_image_with_vision(img_bytes: bytes) -> dict:
         Format as JSON with keys: condition, confidence_pct, severity, features, care_instructions, seek_help
         """
         
-        response = create_chat_completion(
-            client=client,
-            model=settings.openai_vision_model,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{img_base64}",
-                            "detail": "high"
+        # Vision API still uses Chat Completions format
+        try:
+            response = client.chat.completions.create(
+                model=settings.openai_vision_model,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{img_base64}",
+                                "detail": "high"
+                            }
                         }
-                    }
-                ]
-            }],
-            temperature=0.2,
-            max_tokens_value=600
-        )
+                    ]
+                }],
+                temperature=0.2,
+                max_completion_tokens=600
+            )
+        except Exception as e:
+            if "max_completion_tokens" in str(e):
+                response = client.chat.completions.create(
+                    model=settings.openai_vision_model,
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{img_base64}",
+                                    "detail": "high"
+                                }
+                            }
+                        ]
+                    }],
+                    temperature=0.2,
+                    max_tokens=600
+                )
+            else:
+                raise e
         
         vision_content = response.choices[0].message.content
         return json.loads(vision_content)
@@ -699,15 +724,15 @@ async def enhance_diagnosis_with_ai(condition: str, confidence: float, severity:
         Keep responses concise and medically accurate.
         """
         
-        response = create_chat_completion(
+        response = create_openai_response(
             client=client,
             model=settings.openai_model,
-            messages=[{"role": "user", "content": prompt}],
+            input_text=prompt,
             temperature=0.3,
             max_tokens_value=500
         )
         
-        ai_content = response.choices[0].message.content
+        ai_content = response.output_text
         return json.loads(ai_content)
         
     except Exception as e:
