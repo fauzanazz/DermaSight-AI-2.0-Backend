@@ -5,37 +5,35 @@ echo "Starting DermaSight AI Backend..."
 
 # Wait for database to be ready
 echo "Waiting for database to be ready..."
-python -c "
-import asyncio
-import asyncpg
+for i in {1..30}; do
+    if python -c "
+import psycopg2
 import os
-import time
-
-async def wait_for_db():
-    max_attempts = 30
-    attempt = 0
-    
+try:
+    # Parse DATABASE_URL
     db_url = os.getenv('DATABASE_URL', 'postgresql+asyncpg://skinscan:skinscan@db:5432/skinscan')
-    # Convert SQLAlchemy URL to asyncpg URL
+    # Convert to psycopg2 format
     db_url = db_url.replace('postgresql+asyncpg://', 'postgresql://')
     
-    while attempt < max_attempts:
-        try:
-            conn = await asyncpg.connect(db_url)
-            await conn.close()
-            print('Database is ready!')
-            break
-        except Exception as e:
-            attempt += 1
-            print(f'Database not ready, attempt {attempt}/{max_attempts}: {e}')
-            await asyncio.sleep(2)
-    
-    if attempt >= max_attempts:
-        print('Failed to connect to database after maximum attempts')
-        exit(1)
+    conn = psycopg2.connect(db_url)
+    conn.close()
+    print('Database is ready!')
+    exit(0)
+except Exception as e:
+    print(f'Database not ready: {e}')
+    exit(1)
+"; then
+        echo "Database connection successful!"
+        break
+    else
+        echo "Waiting for database... attempt $i/30"
+        sleep 2
+    fi
+done
 
-asyncio.run(wait_for_db())
-"
+# Run database initialization
+echo "Initializing database..."
+python init_db.py || echo "Database initialization completed or skipped"
 
 # Run database migrations
 echo "Running database migrations..."

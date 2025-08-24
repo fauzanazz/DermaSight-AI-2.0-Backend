@@ -215,11 +215,18 @@ def download_model():
             if os.path.exists(local_model_path):
                 logger.info(f"Loading local model from: {local_model_path}")
                 try:
-                    model = YOLO(local_model_path)
-                    logger.info("Successfully loaded local custom model")
+                    # Try as classification model first
+                    model = YOLO(local_model_path, task='classify')
+                    logger.info("Successfully loaded local custom model as classification")
                     return model
                 except Exception as e:
-                    logger.error(f"Failed to load local model: {e}")
+                    try:
+                        # Fallback to detection model
+                        model = YOLO(local_model_path, task='detect')
+                        logger.info("Successfully loaded local custom model as detection")
+                        return model
+                    except Exception as e2:
+                        logger.error(f"Failed to load local model: {e}, {e2}")
             else:
                 logger.info(f"Local model not found at: {local_model_path}")
             
@@ -228,17 +235,25 @@ def download_model():
             if env_model_path and os.path.exists(env_model_path):
                 logger.info(f"Loading model from environment path: {env_model_path}")
                 try:
-                    model = YOLO(env_model_path)
-                    logger.info("Successfully loaded model from environment path")
+                    # Try as classification model first
+                    model = YOLO(env_model_path, task='classify')
+                    logger.info("Successfully loaded environment model as classification")
                     return model
                 except Exception as e:
-                    logger.error(f"Failed to load model from environment path: {e}")
+                    try:
+                        # Fallback to detection model
+                        model = YOLO(env_model_path, task='detect')
+                        logger.info("Successfully loaded environment model as detection")
+                        return model
+                    except Exception as e2:
+                        logger.error(f"Failed to load environment model: {e}, {e2}")
 
             # Priority 3: Download from Hugging Face
             model_url = settings.model_url
             if model_url:
                 logger.info(f"Downloading custom model from HuggingFace: {model_url}")
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.pth') as tmp_file:
+                # Use .pt extension for YOLO compatibility
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.pt') as tmp_file:
                     try:
                         response = requests.get(model_url, stream=True, timeout=300)
                         response.raise_for_status()
@@ -258,10 +273,17 @@ def download_model():
                         tmp_file.flush()
                         logger.info("Model download completed, loading...")
                         
-                        # Try to load the downloaded model
-                        model = YOLO(tmp_file.name)
-                        logger.info("Successfully loaded HuggingFace model")
-                        return model
+                        # Try to load the downloaded model with explicit task type
+                        try:
+                            # First try as classification model
+                            model = YOLO(tmp_file.name, task='classify')
+                            logger.info("Successfully loaded HuggingFace model as classification")
+                            return model
+                        except:
+                            # Fallback to detection model
+                            model = YOLO(tmp_file.name, task='detect')
+                            logger.info("Successfully loaded HuggingFace model as detection")
+                            return model
                         
                     except requests.RequestException as e:
                         logger.error(f"Network error downloading model: {e}")
