@@ -20,7 +20,7 @@ async def diagnose(image: UploadFile = File(...), db: AsyncSession = Depends(get
     if len(img_bytes) > 10 * 1024 * 1024:  # 10MB limit
         raise HTTPException(status_code=413, detail="Image too large")
     
-    result = run_inference(img_bytes)
+    result = await run_inference(img_bytes)
     
     log_entry = DiagnosisLog(
         model_version=settings.model_version,
