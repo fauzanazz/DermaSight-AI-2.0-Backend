@@ -182,11 +182,20 @@ def load_yolo():
     global YOLO
     if YOLO is None:
         try:
+            # Try to import ultralytics
             from ultralytics import YOLO as _YOLO
             YOLO = _YOLO
+            logger.info("Successfully loaded YOLO")
         except ImportError as e:
             logger.error(f"Failed to import YOLO: {e}")
-            raise Exception("Model initialization failed")
+            logger.warning("YOLO model unavailable, will use fallback methods")
+            YOLO = None
+            return None
+        except Exception as e:
+            logger.error(f"Error loading YOLO dependencies: {e}")
+            logger.warning("YOLO model unavailable due to system dependencies")
+            YOLO = None
+            return None
     return YOLO
 
 def download_model():
@@ -195,42 +204,51 @@ def download_model():
     if model is None:
         YOLO = load_yolo()
         
-        # Try to load from environment-specified path first
-        model_path = os.getenv("MODEL_PATH")
-        if model_path and os.path.exists(model_path):
-            logger.info(f"Loading model from {model_path}")
-            model = YOLO(model_path)
-            return model
-
-        # Try local development path
-        local_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models", "best.pt")
-        if os.path.exists(local_path):
-            logger.info("Loading model from local path")
-            model = YOLO(local_path)
-            return model
-
-        # Download from Hugging Face
-        model_url = os.getenv("MODEL_URL", "https://huggingface.co/fauzanazz/EfficientNet-skin-disease/resolve/main/best_efficientnet.pth")
-        logger.info("Downloading model from Hugging Face")
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pt') as tmp_file:
-            try:
-                response = requests.get(model_url, stream=True)
-                response.raise_for_status()
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        tmp_file.write(chunk)
-                tmp_file.flush()
-                
-                model = YOLO(tmp_file.name)
+        # If YOLO is unavailable, return None to trigger fallback
+        if YOLO is None:
+            logger.warning("YOLO unavailable, using fallback inference methods")
+            return None
+        
+        try:
+            # Try to load from environment-specified path first
+            model_path = os.getenv("MODEL_PATH")
+            if model_path and os.path.exists(model_path):
+                logger.info(f"Loading model from {model_path}")
+                model = YOLO(model_path)
                 return model
-            except Exception as e:
-                logger.error(f"Error downloading model: {e}")
-                raise Exception("Failed to load model")
-            finally:
+
+            # Try local development path
+            local_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models", "best.pt")
+            if os.path.exists(local_path):
+                logger.info("Loading model from local path")
+                model = YOLO(local_path)
+                return model
+
+            # Download from Hugging Face
+            model_url = os.getenv("MODEL_URL", "https://huggingface.co/fauzanazz/EfficientNet-skin-disease/resolve/main/best_efficientnet.pth")
+            logger.info("Downloading model from Hugging Face")
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pt') as tmp_file:
                 try:
-                    os.unlink(tmp_file.name)
-                except:
-                    pass
+                    response = requests.get(model_url, stream=True)
+                    response.raise_for_status()
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            tmp_file.write(chunk)
+                    tmp_file.flush()
+                    
+                    model = YOLO(tmp_file.name)
+                    return model
+                except Exception as e:
+                    logger.error(f"Error downloading model: {e}")
+                    return None
+                finally:
+                    try:
+                        os.unlink(tmp_file.name)
+                    except:
+                        pass
+        except Exception as e:
+            logger.error(f"Error loading YOLO model: {e}")
+            return None
     
     return model
 
@@ -288,12 +306,57 @@ async def run_inference(img_bytes: bytes) -> DiagnosisResponse:
     try:
         model = download_model()
         
+        # Validate image first
         try:
             image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
         except Exception as e:
             logger.error(f"Invalid image file: {e}")
             return _mock_response()
         
+        # If YOLO model is unavailable, use Vision API directly
+        if model is None:
+            logger.info("YOLO model unavailable, using Vision API for analysis")
+            vision_analysis = await analyze_image_with_vision(img_bytes)
+            
+            if vision_analysis:
+                # Use Vision API results
+                mapped_label = vision_analysis.get("condition", "Unknown/Normal")
+                vision_conf = vision_analysis.get("confidence_pct", 50) / 100.0
+                severity = vision_analysis.get("severity", "mild")
+                
+                top_condition = ConditionProb(
+                    label=mapped_label,
+                    icd10=ICD_MAP.get(mapped_label, "L99"),
+                    confidence=vision_conf
+                )
+                
+                # Create minimal condition list
+                other_conditions = [top_condition]
+                
+                pre_med = vision_analysis.get("care_instructions", ["Monitor condition", "Seek professional evaluation if symptoms persist"])
+                advice = vision_analysis.get("seek_help", "Consider professional evaluation for accurate diagnosis.")
+                
+                meta = {
+                    "modelVersion": f"{settings.model_version}-vision-only",
+                    "analysis_method": "vision_only",
+                    "reason": "YOLO model unavailable",
+                    "vision_features": vision_analysis.get("features", "")
+                }
+                
+                return DiagnosisResponse(
+                    topCondition=top_condition,
+                    conditions=other_conditions,
+                    severity=severity,
+                    preMedication=pre_med,
+                    advice=advice,
+                    _meta=meta
+                )
+            else:
+                # Vision API also failed, return enhanced mock response
+                logger.warning("Both YOLO and Vision API unavailable, using mock response")
+                return _enhanced_mock_response()
+        
+        # Standard YOLO inference flow
         results = model(image, verbose=False)
         
         pred_idx = int(results[0].probs.top1)
@@ -552,24 +615,58 @@ async def enhance_diagnosis_with_ai(condition: str, confidence: float, severity:
 def _mock_response() -> DiagnosisResponse:
     """Fallback mock response when model fails"""
     top = ConditionProb(
-        label="Atopic dermatitis", 
-        icd10=ICD_MAP["Atopic dermatitis"], 
-        confidence=0.75
+        label="Eczema", 
+        icd10=ICD_MAP["Eczema"], 
+        confidence=0.65
     )
     others = [
         top,
-        ConditionProb(label="Psoriasis", icd10=ICD_MAP["Psoriasis"], confidence=0.15),
-        ConditionProb(label="Contact dermatitis", icd10=ICD_MAP["Contact dermatitis"], confidence=0.10)
+        ConditionProb(label="Psoriasis", icd10=ICD_MAP["Psoriasis"], confidence=0.20),
+        ConditionProb(label="Unknown/Normal", icd10=ICD_MAP["Unknown/Normal"], confidence=0.15)
     ]
     
     severity = "mild"
-    pre = PREMED.get((top.label, severity), ["Keep area clean and dry"])
+    pre = PREMED.get((top.label, severity), ["Keep area clean and dry", "Apply gentle moisturizer"])
     
     return DiagnosisResponse(
         topCondition=top,
         conditions=others,
         severity=severity, 
         preMedication=pre,
-        advice="Seek professional evaluation if symptoms persist or worsen within 48–72h.",
-        _meta={"modelVersion": f"{settings.model_version}-fallback"}
+        advice="This is a basic assessment. Seek professional evaluation for accurate diagnosis.",
+        _meta={"modelVersion": f"{settings.model_version}-fallback", "analysis_method": "mock"}
+    )
+
+def _enhanced_mock_response() -> DiagnosisResponse:
+    """Enhanced mock response when all AI services are unavailable"""
+    top = ConditionProb(
+        label="Unknown/Normal", 
+        icd10=ICD_MAP["Unknown/Normal"], 
+        confidence=0.50
+    )
+    others = [
+        top,
+        ConditionProb(label="Eczema", icd10=ICD_MAP["Eczema"], confidence=0.30),
+        ConditionProb(label="Acne", icd10=ICD_MAP["Acne"], confidence=0.20)
+    ]
+    
+    severity = "mild"
+    pre = [
+        "Monitor the condition for any changes",
+        "Keep the area clean and dry", 
+        "Avoid scratching or irritating the area",
+        "Use gentle, fragrance-free products"
+    ]
+    
+    return DiagnosisResponse(
+        topCondition=top,
+        conditions=others,
+        severity=severity, 
+        preMedication=pre,
+        advice="IMPORTANT: AI analysis is currently unavailable. Please consult a healthcare professional or dermatologist for proper diagnosis and treatment.",
+        _meta={
+            "modelVersion": f"{settings.model_version}-unavailable", 
+            "analysis_method": "fallback_only",
+            "warning": "AI services unavailable"
+        }
     )

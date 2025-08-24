@@ -1,3 +1,9 @@
+version: '3.8'
+
+networks:
+  dermasight-network:
+    driver: bridge
+
 services:
   db:
     build:
@@ -5,28 +11,85 @@ services:
       dockerfile: Dockerfile.postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: skinscan
-      POSTGRES_USER: skinscan
-      POSTGRES_PASSWORD: skinscan
-    ports: 
-      - "5432:5432"
+      POSTGRES_DB: ${POSTGRES_DB:-skinscan}
+      POSTGRES_USER: ${POSTGRES_USER:-skinscan}  
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-skinscan}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    expose:
+      - "5432"
+    # Remove port mapping for Dokploy - internal service only
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ../files/postgres-data:/var/lib/postgresql/data
+      - ../files/postgres-init:/docker-entrypoint-initdb.d
+    networks:
+      - dermasight-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-skinscan} -d ${POSTGRES_DB:-skinscan}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
   
   api:
-    build: .
+    build: 
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     environment:
-      DATABASE_URL: postgresql+asyncpg://skinscan:skinscan@db:5432/skinscan
-      CORS_ORIGINS: http://localhost:3000,http://localhost:3001
-      STORE_IMAGES: "false"
-    ports:
-      - "8000:8000"
+      # Database Configuration
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-skinscan}:${POSTGRES_PASSWORD:-skinscan}@db:5432/${POSTGRES_DB:-skinscan}
+      
+      # CORS Configuration  
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,https://dermasight.vercel.app}
+      
+      # Application Settings
+      STORE_IMAGES: ${STORE_IMAGES:-false}
+      MODEL_VERSION: ${MODEL_VERSION:-skinscan-derm-v1}
+      MODEL_PATH: ${MODEL_PATH:-}
+      MODEL_URL: ${MODEL_URL:-https://huggingface.co/fauzanazz/EfficientNet-skin-disease/resolve/main/best_efficientnet.pth}
+      
+      # OpenAI/VLLM Configuration
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4}
+      OPENAI_VISION_MODEL: ${OPENAI_VISION_MODEL:-gpt-4-vision-preview}
+      USE_AI_ENHANCEMENT: ${USE_AI_ENHANCEMENT:-true}
+      CONFIDENCE_THRESHOLD: ${CONFIDENCE_THRESHOLD:-0.6}
+      
+      # Runtime Settings
+      PYTHONPATH: /app
+      PYTHONDONTWRITEBYTECODE: 1
+      PYTHONUNBUFFERED: 1
+    
+    expose:
+      - "8000"
+    # Remove port mapping for Dokploy - will be handled by reverse proxy
+    
     volumes:
-      - .:/app
+      - ../files/app-logs:/app/logs
+      - ../files/models:/app/models
+    
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+    
+    networks:
+      - dermasight-network
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"] 
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
 volumes:
-  postgres_data:
+  # These will be created in ../files/ by Dokploy
+  postgres-data:
+    driver: local
+  postgres-init:
+    driver: local
+  app-logs:
+    driver: local  
+  models:
+    driver: local
