@@ -210,42 +210,80 @@ def download_model():
             return None
         
         try:
-            # Try to load from environment-specified path first
-            model_path = os.getenv("MODEL_PATH")
-            if model_path and os.path.exists(model_path):
-                logger.info(f"Loading model from {model_path}")
-                model = YOLO(model_path)
-                return model
-
-            # Try local development path
-            local_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models", "best.pt")
-            if os.path.exists(local_path):
-                logger.info("Loading model from local path")
-                model = YOLO(local_path)
-                return model
-
-            # Download from Hugging Face
-            model_url = os.getenv("MODEL_URL", "https://huggingface.co/fauzanazz/EfficientNet-skin-disease/resolve/main/best_efficientnet.pth")
-            logger.info("Downloading model from Hugging Face")
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.pt') as tmp_file:
+            # Priority 1: Try local model path (models/best_efficientnet.pth)
+            local_model_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models", "best_efficientnet.pth")
+            if os.path.exists(local_model_path):
+                logger.info(f"Loading local model from: {local_model_path}")
                 try:
-                    response = requests.get(model_url, stream=True)
-                    response.raise_for_status()
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            tmp_file.write(chunk)
-                    tmp_file.flush()
-                    
-                    model = YOLO(tmp_file.name)
+                    model = YOLO(local_model_path)
+                    logger.info("Successfully loaded local custom model")
                     return model
                 except Exception as e:
-                    logger.error(f"Error downloading model: {e}")
-                    return None
-                finally:
+                    logger.error(f"Failed to load local model: {e}")
+            else:
+                logger.info(f"Local model not found at: {local_model_path}")
+            
+            # Priority 2: Try environment-specified path
+            env_model_path = settings.model_path
+            if env_model_path and os.path.exists(env_model_path):
+                logger.info(f"Loading model from environment path: {env_model_path}")
+                try:
+                    model = YOLO(env_model_path)
+                    logger.info("Successfully loaded model from environment path")
+                    return model
+                except Exception as e:
+                    logger.error(f"Failed to load model from environment path: {e}")
+
+            # Priority 3: Download from Hugging Face
+            model_url = settings.model_url
+            if model_url:
+                logger.info(f"Downloading custom model from HuggingFace: {model_url}")
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.pth') as tmp_file:
                     try:
-                        os.unlink(tmp_file.name)
-                    except:
-                        pass
+                        response = requests.get(model_url, stream=True, timeout=300)
+                        response.raise_for_status()
+                        
+                        total_size = int(response.headers.get('content-length', 0))
+                        downloaded = 0
+                        
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                tmp_file.write(chunk)
+                                downloaded += len(chunk)
+                                if total_size > 0:
+                                    progress = (downloaded / total_size) * 100
+                                    if downloaded % (1024 * 1024) == 0:  # Log every MB
+                                        logger.info(f"Download progress: {progress:.1f}%")
+                        
+                        tmp_file.flush()
+                        logger.info("Model download completed, loading...")
+                        
+                        # Try to load the downloaded model
+                        model = YOLO(tmp_file.name)
+                        logger.info("Successfully loaded HuggingFace model")
+                        return model
+                        
+                    except requests.RequestException as e:
+                        logger.error(f"Network error downloading model: {e}")
+                    except Exception as e:
+                        logger.error(f"Error loading downloaded model: {e}")
+                    finally:
+                        try:
+                            os.unlink(tmp_file.name)
+                        except:
+                            pass
+            else:
+                logger.warning("No HuggingFace model URL provided")
+
+            # Priority 4: Fallback to built-in YOLO classification model
+            logger.info("Falling back to built-in YOLO classification model")
+            try:
+                model = YOLO('yolov8n-cls.pt')  # Built-in classification model
+                logger.info("Successfully loaded built-in YOLO model as fallback")
+                return model
+            except Exception as e:
+                logger.error(f"Built-in YOLO model also failed: {e}")
+                return None
         except Exception as e:
             logger.error(f"Error loading YOLO model: {e}")
             return None
