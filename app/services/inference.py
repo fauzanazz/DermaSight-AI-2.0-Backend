@@ -179,9 +179,6 @@ ICD_MAP = {
     "Contact dermatitis": "L25",
 }
 
-# Skin Disease Classifier Model
-model = None
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Skin disease classification labels (matching existing skin disease categories)
 SKIN_DISEASE_LABELS = [
@@ -215,7 +212,10 @@ SKIN_DISEASE_LABELS = [
 # Map index to skin disease label
 LABEL_MAP = {i: label for i, label in enumerate(SKIN_DISEASE_LABELS)}
 
-# Image preprocessing transforms
+# -------------------------
+# Image Preprocessing
+# -------------------------
+
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
@@ -225,10 +225,13 @@ transform = transforms.Compose([
     ),
 ])
 
+# -------------------------
+# Model Definition
+# -------------------------
+
 class SkinDiseaseClassifier(nn.Module):
     def __init__(self, num_classes, pretrained=True):
         super().__init__()
-        # Use EfficientNet-B3 architecture
         self.model = models.efficientnet_b3(
             weights=models.EfficientNet_B3_Weights.IMAGENET1K_V1 if pretrained else None
         )
@@ -240,125 +243,85 @@ class SkinDiseaseClassifier(nn.Module):
     def forward(self, x):
         return self.model(x)
 
-def _load_model_from_state_dict_file(checkpoint_path: str, num_classes: int):
-    """Load EfficientNet model using the specified format"""
+# -------------------------
+# Model Loading
+# -------------------------
+
+NUM_CLASSES = len(SKIN_DISEASE_LABELS)
+# Get the directory where inference.py is located
+SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent
+MODEL_FILENAME = 'best_efficientnet.pth'
+MODEL_PATH = SCRIPT_DIR / "models" / MODEL_FILENAME
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def load_model():
+    """Load the EfficientNet model"""
     try:
+        # Try efficientnet-pytorch first
         from efficientnet_pytorch import EfficientNet
-        
-        # Create model with from_pretrained and load checkpoint
-        model = EfficientNet.from_pretrained('efficientnet-b3', num_classes=num_classes)
+        model = EfficientNet.from_pretrained('efficientnet-b3', num_classes=NUM_CLASSES)
         model.to(device)
-        model.load_state_dict(torch.load(checkpoint_path, map_location=device))
-        model.eval()
         
-        logger.info("Successfully loaded EfficientNet model using from_pretrained")
-        return model
-    except Exception as e:
-        logger.error(f"Error loading EfficientNet with from_pretrained: {e}")
-        
-        # Fallback to previous method
-        try:
-            # Try torchvision EfficientNet-B3 first
-            tv_model = SkinDiseaseClassifier(num_classes=num_classes, pretrained=False)
-            state = torch.load(checkpoint_path, map_location=device)
-            tv_model.load_state_dict(state)
-            tv_model.eval()
-            tv_model.to(device)
-            return tv_model
-        except Exception as e2:
-            logger.error(f"Fallback to torchvision EfficientNet-B3 also failed: {e2}")
-            return None
-
-def download_model():
-    global model
-    if model is None:
-        try:
-            NUM_CLASSES = len(SKIN_DISEASE_LABELS)
-            
-            # Priority 1: Try local model path
-            script_dir = Path(__file__).resolve().parent.parent.parent
-            local_model_path = script_dir / "models" / "best_efficientnet.pth"
-            
-            if local_model_path.exists():
-                logger.info(f"Loading local model from: {local_model_path}")
-                loaded = _load_model_from_state_dict_file(str(local_model_path), NUM_CLASSES)
-                if loaded:
-                    model = loaded
-                    logger.info("Successfully loaded local EfficientNet model")
-                    return model
-                else:
-                    logger.error("Local model file exists but could not be loaded with known formats")
-            else:
-                logger.info(f"Local model not found at: {local_model_path}")
-            
-            # Priority 2: Try environment-specified path
-            env_model_path = settings.model_path
-            if env_model_path and os.path.exists(env_model_path):
-                logger.info(f"Loading model from environment path: {env_model_path}")
-                loaded = _load_model_from_state_dict_file(env_model_path, NUM_CLASSES)
-                if loaded:
-                    model = loaded
-                    logger.info("Successfully loaded environment EfficientNet model")
-                    return model
-                else:
-                    logger.error("Environment model path found but could not be loaded with known formats")
-
-            # Priority 3: Download from URL
-            model_url = settings.model_url
-            if model_url:
-                logger.info(f"Downloading EfficientNet model from: {model_url}")
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.pth') as tmp_file:
+        # Try to load local model first
+        if MODEL_PATH.exists():
+            logger.info(f"Loading local model from: {MODEL_PATH}")
+            model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+        elif settings.model_path and os.path.exists(settings.model_path):
+            logger.info(f"Loading model from environment path: {settings.model_path}")
+            model.load_state_dict(torch.load(settings.model_path, map_location=device))
+        elif settings.model_url:
+            logger.info(f"Downloading model from: {settings.model_url}")
+            # Download and load model
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pth') as tmp_file:
+                try:
+                    response = requests.get(settings.model_url, stream=True, timeout=300)
+                    response.raise_for_status()
+                    
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            tmp_file.write(chunk)
+                    
+                    tmp_file.flush()
+                    model.load_state_dict(torch.load(tmp_file.name, map_location=device))
+                finally:
                     try:
-                        response = requests.get(model_url, stream=True, timeout=300)
-                        response.raise_for_status()
-                        
-                        total_size = int(response.headers.get('content-length', 0))
-                        downloaded = 0
-                        
-                        for chunk in response.iter_content(chunk_size=8192):
-                            if chunk:
-                                tmp_file.write(chunk)
-                                downloaded += len(chunk)
-                                if total_size > 0:
-                                    progress = (downloaded / total_size) * 100
-                                    if downloaded % (1024 * 1024) == 0:  # Log every MB
-                                        logger.info(f"Download progress: {progress:.1f}%")
-                        
-                        tmp_file.flush()
-                        logger.info("Model download completed, loading...")
-                        
-                        loaded = _load_model_from_state_dict_file(tmp_file.name, NUM_CLASSES)
-                        if loaded:
-                            model = loaded
-                            logger.info("Successfully loaded downloaded EfficientNet model")
-                            return model
-                        else:
-                            logger.error("Downloaded model could not be loaded with known formats")
-                        
-                    except requests.RequestException as e:
-                        logger.error(f"Network error downloading model: {e}")
-                    except Exception as e:
-                        logger.error(f"Error loading downloaded model: {e}")
-                    finally:
-                        try:
-                            os.unlink(tmp_file.name)
-                        except:
-                            pass
-            else:
-                logger.warning("No model URL provided")
-
-            # Fallback: Use pretrained model without custom weights
-            logger.info("Falling back to pretrained EfficientNet model")
-            model = SkinDiseaseClassifier(num_classes=NUM_CLASSES, pretrained=True)
+                        os.unlink(tmp_file.name)
+                    except:
+                        pass
+        
+        model.eval()
+        logger.info("Successfully loaded EfficientNet model")
+        return model
+        
+    except Exception as e:
+        logger.error(f"Error loading efficientnet-pytorch: {e}")
+        
+        # Fallback to torchvision EfficientNet
+        try:
+            model = SkinDiseaseClassifier(num_classes=NUM_CLASSES, pretrained=False)
+            
+            if MODEL_PATH.exists():
+                model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+            elif settings.model_path and os.path.exists(settings.model_path):
+                model.load_state_dict(torch.load(settings.model_path, map_location=device))
+            
             model.eval()
             model.to(device)
-            logger.warning("Using pretrained EfficientNet model - predictions may not be accurate for skin diseases")
+            logger.info("Successfully loaded torchvision EfficientNet model")
             return model
-            
-        except Exception as e:
-            logger.error(f"Error loading EfficientNet model: {e}")
+        except Exception as e2:
+            logger.error(f"Failed to load model: {e2}")
             return None
-    
+
+# Initialize model globally
+model = None
+
+def get_model():
+    """Get the loaded model, loading it if necessary"""
+    global model
+    if model is None:
+        model = load_model()
     return model
 
 async def determine_severity_with_llm(condition: str, confidence: float) -> str:
@@ -413,7 +376,7 @@ def _fallback_severity(confidence: float) -> str:
 async def run_inference(img_bytes: bytes) -> DiagnosisResponse:
     """Run inference on image bytes and return diagnosis response"""
     try:
-        model = download_model()
+        model = get_model()
         
         # Validate image first
         try:
