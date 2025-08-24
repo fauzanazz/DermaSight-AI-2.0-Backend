@@ -619,23 +619,15 @@ async def analyze_image_with_vision(img_bytes: bytes) -> dict:
             
         img_base64 = base64.b64encode(img_bytes).decode('utf-8')
         
-        prompt = """
-        You are a dermatology specialist. Analyze this skin image and provide your assessment.
-        
-        IMPORTANT: Your response must be ONLY valid JSON format with no additional text, explanations, or markdown formatting.
-        
-        Required JSON structure:
-        {
-            "condition": "most likely skin condition name",
-            "confidence_pct": 75,
-            "severity": "mild|moderate|severe",
-            "features": "key visual features observed",
-            "care_instructions": ["instruction 1", "instruction 2", "instruction 3"],
-            "seek_help": "when to seek professional help"
-        }
-        
-        Respond with only the JSON object, no other text.
-        """
+        prompt = """Analyze this skin image. Return only valid JSON:
+{
+    "condition": "skin condition name",
+    "confidence_pct": 75,
+    "severity": "mild",
+    "features": "what you see",
+    "care_instructions": ["care tip 1", "care tip 2"],
+    "seek_help": "when to see doctor"
+}"""
         
         # Vision API using latest OpenAI format
         response = client.chat.completions.create(
@@ -657,19 +649,42 @@ async def analyze_image_with_vision(img_bytes: bytes) -> dict:
         )
         
         vision_content = response.choices[0].message.content
-        logger.info(f"Vision API raw response: {vision_content}")
+        logger.info(f"Vision API raw response: '{vision_content}'")
+        logger.info(f"Vision response finish reason: {response.choices[0].finish_reason}")
+        
+        # Check if content is None or empty
+        if not vision_content or vision_content.strip() == "":
+            logger.warning("Vision API returned empty content, using fallback")
+            return {
+                "condition": "Unknown/Normal",
+                "confidence_pct": 50,
+                "severity": "mild",
+                "features": "Unable to analyze image - empty response",
+                "care_instructions": ["Monitor condition", "Seek professional evaluation"],
+                "seek_help": "Consider professional evaluation for accurate diagnosis."
+            }
         
         try:
             return json.loads(vision_content)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse vision response as JSON: {e}")
-            logger.error(f"Raw content: {vision_content}")
+            logger.error(f"Raw content: '{vision_content}'")
+            # Try to extract JSON from markdown-formatted response
+            if '```json' in vision_content:
+                try:
+                    json_start = vision_content.find('{')
+                    json_end = vision_content.rfind('}') + 1
+                    if json_start >= 0 and json_end > json_start:
+                        json_content = vision_content[json_start:json_end]
+                        return json.loads(json_content)
+                except:
+                    pass
             # Return a fallback structure
             return {
                 "condition": "Unknown/Normal",
                 "confidence_pct": 50,
                 "severity": "mild",
-                "features": "Unable to analyze image",
+                "features": "Unable to parse response",
                 "care_instructions": ["Monitor condition", "Seek professional evaluation"],
                 "seek_help": "Consider professional evaluation for accurate diagnosis."
             }
@@ -685,26 +700,16 @@ async def enhance_diagnosis_with_ai(condition: str, confidence: float, severity:
         if not client or not settings.use_ai_enhancement:
             return {}
             
-        prompt = f"""
-        You are a dermatology AI assistant. Based on the following computer vision diagnosis, provide medical insights.
-        
-        Condition: {condition}
-        Confidence: {confidence:.2%}
-        Severity: {severity}
-        
-        IMPORTANT: Your response must be ONLY valid JSON format with no additional text, explanations, or markdown formatting.
-        
-        Required JSON structure:
-        {{
-            "description": "brief clinical description of the condition",
-            "symptoms": "common symptoms to look for",
-            "care_instructions": ["instruction 1", "instruction 2", "instruction 3", "instruction 4"],
-            "seek_help": "when to seek professional help",
-            "differentials": ["differential 1", "differential 2", "differential 3"]
-        }}
-        
-        Respond with only the JSON object, no other text.
-        """
+        prompt = f"""Provide medical information for {condition} (confidence: {confidence:.2%}, severity: {severity}).
+
+Return only valid JSON:
+{{
+    "description": "brief description",
+    "symptoms": "main symptoms", 
+    "care_instructions": ["care tip 1", "care tip 2", "care tip 3"],
+    "seek_help": "when to see doctor",
+    "differentials": ["similar condition 1", "similar condition 2"]
+}}"""
         
         response = create_chat_completion(
             client=client,
@@ -714,13 +719,29 @@ async def enhance_diagnosis_with_ai(condition: str, confidence: float, severity:
         )
         
         ai_content = response.choices[0].message.content
-        logger.info(f"AI enhancement raw response: {ai_content}")
+        logger.info(f"AI enhancement raw response: '{ai_content}'")
+        logger.info(f"Response finish reason: {response.choices[0].finish_reason}")
+        
+        # Check if content is None or empty
+        if not ai_content or ai_content.strip() == "":
+            logger.warning("OpenAI returned empty content, using fallback")
+            return {}
         
         try:
             return json.loads(ai_content)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse AI enhancement response as JSON: {e}")
-            logger.error(f"Raw content: {ai_content}")
+            logger.error(f"Raw content: '{ai_content}'")
+            # Try to extract JSON from markdown-formatted response
+            if '```json' in ai_content:
+                try:
+                    json_start = ai_content.find('{')
+                    json_end = ai_content.rfind('}') + 1
+                    if json_start >= 0 and json_end > json_start:
+                        json_content = ai_content[json_start:json_end]
+                        return json.loads(json_content)
+                except:
+                    pass
             # Return empty dict to trigger fallback behavior
             return {}
         
