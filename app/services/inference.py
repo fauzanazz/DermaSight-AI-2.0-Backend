@@ -240,45 +240,34 @@ class SkinDiseaseClassifier(nn.Module):
     def forward(self, x):
         return self.model(x)
 
-def _load_model_from_state_dict_file(state_path: str, num_classes: int):
-    """Try loading a checkpoint into torchvision EfficientNet; on failure, try efficientnet_pytorch."""
+def _load_model_from_state_dict_file(checkpoint_path: str, num_classes: int):
+    """Load EfficientNet model using the specified format"""
     try:
-        # Try torchvision EfficientNet-B3 first
-        tv_model = SkinDiseaseClassifier(num_classes=num_classes, pretrained=False)
-        state = torch.load(state_path, map_location=device)
-        tv_model.load_state_dict(state)
-        tv_model.eval()
-        tv_model.to(device)
-        return tv_model
+        from efficientnet_pytorch import EfficientNet
+        
+        # Create model with from_pretrained and load checkpoint
+        model = EfficientNet.from_pretrained('efficientnet-b3', num_classes=num_classes)
+        model.to(device)
+        model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+        model.eval()
+        
+        logger.info("Successfully loaded EfficientNet model using from_pretrained")
+        return model
     except Exception as e:
-        logger.error(f"Error loading as torchvision EfficientNet-B3: {e}")
-
-    # Try efficientnet_pytorch features-only load
-    try:
-        from efficientnet_pytorch import EfficientNet  # type: ignore
-    except Exception as e:
-        logger.error(f"efficientnet_pytorch not available: {e}")
-        return None
-    try:
-        state = torch.load(state_path, map_location=device)
-        model_ep = EfficientNet.from_name('efficientnet-b3')
-
-        # Remove classifier weights to avoid size mismatch; we'll re-add our head
-        if isinstance(state, dict):
-            state.pop('_fc.weight', None)
-            state.pop('_fc.bias', None)
-
-        model_ep.load_state_dict(state, strict=False)
-        # Replace head with our desired number of classes
-        in_features = model_ep._fc.in_features
-        model_ep._fc = nn.Linear(in_features, num_classes)
-        model_ep.eval()
-        model_ep.to(device)
-        logger.info("Successfully loaded EfficientNet weights via efficientnet_pytorch (features)")
-        return model_ep
-    except Exception as e:
-        logger.error(f"EfficientNet (efficientnet_pytorch) load failed: {e}")
-        return None
+        logger.error(f"Error loading EfficientNet with from_pretrained: {e}")
+        
+        # Fallback to previous method
+        try:
+            # Try torchvision EfficientNet-B3 first
+            tv_model = SkinDiseaseClassifier(num_classes=num_classes, pretrained=False)
+            state = torch.load(checkpoint_path, map_location=device)
+            tv_model.load_state_dict(state)
+            tv_model.eval()
+            tv_model.to(device)
+            return tv_model
+        except Exception as e2:
+            logger.error(f"Fallback to torchvision EfficientNet-B3 also failed: {e2}")
+            return None
 
 def download_model():
     global model
