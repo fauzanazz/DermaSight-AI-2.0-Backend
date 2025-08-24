@@ -32,6 +32,28 @@ def get_openai_client():
         )
     return openai_client
 
+def create_chat_completion(client, model, messages, temperature, max_tokens_value):
+    """Create chat completion with proper token parameter handling"""
+    try:
+        # Try with max_completion_tokens first (newer models)
+        return client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_completion_tokens=max_tokens_value
+        )
+    except Exception as e:
+        if "max_completion_tokens" in str(e) and "max_tokens" in str(e):
+            # Fallback to max_tokens for older models
+            return client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens_value
+            )
+        else:
+            raise e
+
 PREMED = {
     # Acne
     ("Acne", "mild"): ["Gentle cleanser twice daily", "Oil-free moisturizer", "Avoid picking"],
@@ -344,11 +366,12 @@ async def determine_severity_with_llm(condition: str, confidence: float) -> str:
         Respond with only the severity level (mild/moderate/severe).
         """
         
-        response = client.chat.completions.create(
+        response = create_chat_completion(
+            client=client,
             model=settings.openai_model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
-            max_tokens=10
+            max_tokens_value=10
         )
         
         severity = response.choices[0].message.content.strip().lower()
@@ -624,7 +647,8 @@ async def analyze_image_with_vision(img_bytes: bytes) -> dict:
         Format as JSON with keys: condition, confidence_pct, severity, features, care_instructions, seek_help
         """
         
-        response = client.chat.completions.create(
+        response = create_chat_completion(
+            client=client,
             model=settings.openai_vision_model,
             messages=[{
                 "role": "user",
@@ -640,7 +664,7 @@ async def analyze_image_with_vision(img_bytes: bytes) -> dict:
                 ]
             }],
             temperature=0.2,
-            max_tokens=600
+            max_tokens_value=600
         )
         
         vision_content = response.choices[0].message.content
@@ -675,11 +699,12 @@ async def enhance_diagnosis_with_ai(condition: str, confidence: float, severity:
         Keep responses concise and medically accurate.
         """
         
-        response = client.chat.completions.create(
+        response = create_chat_completion(
+            client=client,
             model=settings.openai_model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
-            max_tokens=500
+            max_tokens_value=500
         )
         
         ai_content = response.choices[0].message.content
