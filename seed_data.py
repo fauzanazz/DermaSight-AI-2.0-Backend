@@ -2,17 +2,46 @@ import asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from app.config import settings
 from app.models import Hospital, HospitalSpecialty, HospitalEquipment, HospitalCondition
 import uuid
 
+async def check_tables_exist(session):
+    """Check if required tables exist"""
+    try:
+        result = await session.execute(text("SELECT to_regclass('hospitals')"))
+        hospitals_exists = result.scalar() is not None
+        
+        result = await session.execute(text("SELECT to_regclass('diagnosis_logs')"))
+        diagnosis_logs_exists = result.scalar() is not None
+        
+        return hospitals_exists and diagnosis_logs_exists
+    except Exception as e:
+        print(f"Error checking tables: {e}")
+        return False
+
 async def seed_hospitals():
     """Seed the database with sample hospital data"""
-    engine = create_async_engine(settings.database_url)
-    AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    
-    async with AsyncSessionLocal() as session:
-        hospitals_data = [
+    try:
+        engine = create_async_engine(settings.database_url)
+        AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        
+        async with AsyncSessionLocal() as session:
+            # Check if tables exist
+            tables_exist = await check_tables_exist(session)
+            if not tables_exist:
+                print("Required tables don't exist yet. Skipping seeding.")
+                return
+            
+            # Check if data already exists
+            result = await session.execute(text("SELECT COUNT(*) FROM hospitals"))
+            count = result.scalar()
+            if count > 0:
+                print(f"Database already contains {count} hospitals. Skipping seeding.")
+                return
+            
+            hospitals_data = [
             {
                 "id": str(uuid.uuid4()),
                 "name": "Jakarta Dermatology Center",
@@ -81,8 +110,15 @@ async def seed_hospitals():
                 cond = HospitalCondition(hospital_id=hosp_data["id"], icd10=condition)
                 session.add(cond)
         
-        await session.commit()
-        print(f"Seeded {len(hospitals_data)} hospitals with their data")
+            await session.commit()
+            print(f"Seeded {len(hospitals_data)} hospitals with their data")
+            
+        await engine.dispose()
+        
+    except SQLAlchemyError as e:
+        print(f"Database error during seeding: {e}")
+    except Exception as e:
+        print(f"Unexpected error during seeding: {e}")
 
 if __name__ == "__main__":
     asyncio.run(seed_hospitals())
