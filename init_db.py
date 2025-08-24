@@ -3,6 +3,8 @@ import asyncpg
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import text
 from app.db import Base
+# Ensure models are imported so SQLAlchemy is aware of all tables
+from app import models  # noqa: F401
 from app.config import settings
 
 async def create_database():

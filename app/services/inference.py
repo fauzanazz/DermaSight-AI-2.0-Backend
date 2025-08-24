@@ -229,8 +229,8 @@ class SkinDiseaseClassifier(nn.Module):
     def __init__(self, num_classes, pretrained=True):
         super().__init__()
         # Use EfficientNet-B0 architecture
-        self.model = models.efficientnet_b0(
-            weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1 if pretrained else None
+        self.model = models.efficientnet_b3(
+            weights=models.EfficientNet_B3_Weights.IMAGENET1K_V1 if pretrained else None
         )
         in_features = self.model.classifier[1].in_features
         self.model.classifier = nn.Sequential(
@@ -239,6 +239,46 @@ class SkinDiseaseClassifier(nn.Module):
 
     def forward(self, x):
         return self.model(x)
+
+def _load_model_from_state_dict_file(state_path: str, num_classes: int):
+    """Try loading a checkpoint into torchvision EfficientNet; on failure, try efficientnet_pytorch."""
+    try:
+        # Try torchvision EfficientNet-B0 first
+        tv_model = SkinDiseaseClassifier(num_classes=num_classes, pretrained=False)
+        state = torch.load(state_path, map_location=device)
+        tv_model.load_state_dict(state)
+        tv_model.eval()
+        tv_model.to(device)
+        return tv_model
+    except Exception as e:
+        logger.error(f"Error loading as torchvision EfficientNet-B0: {e}")
+
+    # Try efficientnet_pytorch features-only load
+    try:
+        from efficientnet_pytorch import EfficientNet  # type: ignore
+    except Exception as e:
+        logger.error(f"efficientnet_pytorch not available: {e}")
+        return None
+    try:
+        state = torch.load(state_path, map_location=device)
+        model_ep = EfficientNet.from_name('efficientnet-b0')
+
+        # Remove classifier weights to avoid size mismatch; we'll re-add our head
+        if isinstance(state, dict):
+            state.pop('_fc.weight', None)
+            state.pop('_fc.bias', None)
+
+        missing_unexpected = model_ep.load_state_dict(state, strict=False)
+        # Replace head with our desired number of classes
+        in_features = model_ep._fc.in_features
+        model_ep._fc = nn.Linear(in_features, num_classes)
+        model_ep.eval()
+        model_ep.to(device)
+        logger.info("Successfully loaded EfficientNet weights via efficientnet_pytorch (features)")
+        return model_ep
+    except Exception as e:
+        logger.error(f"EfficientNet (efficientnet_pytorch) load failed: {e}")
+        return None
 
 def download_model():
     global model
@@ -252,12 +292,13 @@ def download_model():
             
             if local_model_path.exists():
                 logger.info(f"Loading local model from: {local_model_path}")
-                model = SkinDiseaseClassifier(num_classes=NUM_CLASSES, pretrained=False)
-                model.load_state_dict(torch.load(local_model_path, map_location=device))
-                model.eval()
-                model.to(device)
-                logger.info("Successfully loaded local EfficientNet model")
-                return model
+                loaded = _load_model_from_state_dict_file(str(local_model_path), NUM_CLASSES)
+                if loaded:
+                    model = loaded
+                    logger.info("Successfully loaded local EfficientNet model")
+                    return model
+                else:
+                    logger.error("Local model file exists but could not be loaded with known formats")
             else:
                 logger.info(f"Local model not found at: {local_model_path}")
             
@@ -265,12 +306,13 @@ def download_model():
             env_model_path = settings.model_path
             if env_model_path and os.path.exists(env_model_path):
                 logger.info(f"Loading model from environment path: {env_model_path}")
-                model = SkinDiseaseClassifier(num_classes=NUM_CLASSES, pretrained=False)
-                model.load_state_dict(torch.load(env_model_path, map_location=device))
-                model.eval()
-                model.to(device)
-                logger.info("Successfully loaded environment EfficientNet model")
-                return model
+                loaded = _load_model_from_state_dict_file(env_model_path, NUM_CLASSES)
+                if loaded:
+                    model = loaded
+                    logger.info("Successfully loaded environment EfficientNet model")
+                    return model
+                else:
+                    logger.error("Environment model path found but could not be loaded with known formats")
 
             # Priority 3: Download from URL
             model_url = settings.model_url
@@ -296,12 +338,13 @@ def download_model():
                         tmp_file.flush()
                         logger.info("Model download completed, loading...")
                         
-                        model = SkinDiseaseClassifier(num_classes=NUM_CLASSES, pretrained=False)
-                        model.load_state_dict(torch.load(tmp_file.name, map_location=device))
-                        model.eval()
-                        model.to(device)
-                        logger.info("Successfully loaded downloaded EfficientNet model")
-                        return model
+                        loaded = _load_model_from_state_dict_file(tmp_file.name, NUM_CLASSES)
+                        if loaded:
+                            model = loaded
+                            logger.info("Successfully loaded downloaded EfficientNet model")
+                            return model
+                        else:
+                            logger.error("Downloaded model could not be loaded with known formats")
                         
                     except requests.RequestException as e:
                         logger.error(f"Network error downloading model: {e}")
