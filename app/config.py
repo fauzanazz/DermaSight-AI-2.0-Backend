@@ -1,7 +1,9 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 import os
 
 class Settings(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    
     database_url: str = os.getenv("DATABASE_URL", "postgresql+asyncpg://skinscan:skinscan@localhost:5432/skinscan")
     cors_origins: str = os.getenv("CORS_ORIGINS", "http://localhost:3000")
     store_images: bool = os.getenv("STORE_IMAGES", "false").lower() == "true"
