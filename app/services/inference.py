@@ -32,14 +32,15 @@ def get_openai_client():
         )
     return openai_client
 
-def create_chat_completion(client, model, messages, max_tokens_value):
-    """Create chat completion using the latest OpenAI API"""
-    return client.chat.completions.create(
-        model=model,
-        messages=messages,
-        max_completion_tokens=max_tokens_value,
-        temperature=0.0
-        )
+def create_chat_completion(client, model, messages, max_token_limit):
+    kwargs = {"model": model, "messages": messages, "temperature": 0.0}
+
+    if model.startswith(("gpt-5", "gpt-5", "o")):
+        kwargs["max_completion_tokens"] = max_token_limit
+    else:
+        kwargs["max_tokens"] = max_token_limit
+
+    return client.chat.completions.create(**kwargs)
 
 PREMED = {
     # Acne
@@ -357,7 +358,7 @@ async def determine_severity_with_llm(condition: str, confidence: float) -> str:
             client=client,
             model=settings.openai_model,
             messages=[{"role": "user", "content": prompt}],
-            max_completion_tokens=10
+            max_tokens=10
         )
         
         severity = response.choices[0].message.content.strip().lower()
@@ -716,7 +717,7 @@ Return only valid JSON:
             client=client,
             model=settings.openai_model,
             messages=[{"role": "user", "content": prompt}],
-            max_completion_tokens=500
+            max_tokens=500
         )
         
         ai_content = response.choices[0].message.content
