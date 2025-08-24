@@ -37,8 +37,9 @@ def create_chat_completion(client, model, messages, max_tokens_value):
     return client.chat.completions.create(
         model=model,
         messages=messages,
-        max_completion_tokens=max_tokens_value
-    )
+        max_completion_tokens=max_tokens_value,
+        temperature=0.0
+        )
 
 PREMED = {
     # Acne
@@ -356,7 +357,7 @@ async def determine_severity_with_llm(condition: str, confidence: float) -> str:
             client=client,
             model=settings.openai_model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens_value=10
+            max_output_tokens=10
         )
         
         severity = response.choices[0].message.content.strip().lower()
@@ -715,7 +716,7 @@ Return only valid JSON:
             client=client,
             model=settings.openai_model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens_value=500
+            max_output_tokens=500
         )
         
         ai_content = response.choices[0].message.content
